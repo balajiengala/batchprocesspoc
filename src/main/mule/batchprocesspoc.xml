@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:batch="http://www.mulesoft.org/schema/mule/batch"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+	<file:config name="File_Config" doc:name="File Config" doc:id="0ea346c2-cb1c-4e8f-945d-10a6776d9900" />
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="73606513-6267-48e9-80cb-941345797382" >
+		<db:my-sql-connection host="localhost" port="3306" user="root" password="root" />
+	</db:config>
+	<file:config name="File_Config1" doc:name="File Config" doc:id="dea7befc-19bf-4ba4-8689-2eeefce48b9d" />
+	<flow name="batchprocesspocFlow" doc:id="b020a160-f1c8-44cd-a411-f1fdd14b714d" >
+		<file:listener doc:name="On New or Updated File" doc:id="89482a02-a0f0-46e8-ac86-5da243ccbaa9" config-ref="File_Config" directory="D:\Balaji\Sample-files\input" autoDelete="true" moveToDirectory="D:\Balaji\Sample-files\backup" outputMimeType="application/csv" applyPostActionWhenFailed="false">
+			<scheduling-strategy >
+				<fixed-frequency frequency="30" timeUnit="SECONDS" />
+			</scheduling-strategy>
+		</file:listener>
+		<ee:transform doc:name="Transform Message" doc:id="2e528429-7de6-4ee9-a220-eb9185d94559" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+payload groupBy $.OrderID pluck $]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="584bbbd3-646a-4984-9204-afc17afd2642" message="#[payload]"/>
+		<batch:job jobName="batchprocesspocBatch_Job" doc:id="78744e07-e636-4cb6-912f-6b2082f5339c" blockSize="4" maxFailedRecords="-1">
+			<batch:process-records>
+				<batch:step name="Batch_Step" doc:id="35cf918b-723b-4921-8449-d38d0a4e9f24" >
+					<logger level="INFO" doc:name="Logger" doc:id="6cdf515b-36f8-406a-9eac-5751ab9f47fb" message="#[payload]"/>
+					<ee:transform doc:name="Transform Message" doc:id="7d698ddc-111c-42f1-82a2-349be6d6fff3" >
+						<ee:message >
+							<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	order:
+	 {
+	 	orderId : payload.OrderID reduce $ ,
+	 	numberOfItems: sizeOf(payload),
+	 	errorQuantity: payload[0].Qty/2.0
+	 }
+}]]></ee:set-payload>
+						</ee:message>
+					</ee:transform>
+					<set-variable value="#[payload]" doc:name="Set Variable" doc:id="d77896fc-b619-4b01-b019-59f92fbfca92" variableName="data"/>
+					<db:insert doc:name="Insert" doc:id="78b1b973-96b4-4d88-9e7e-9abf54aaa6b1" config-ref="Database_Config">
+						<db:sql><![CDATA[insert into departmentdetails.orderdeatails values (:OrderId, :NumOfItems)]]></db:sql>
+						<db:input-parameters><![CDATA[#[{
+	OrderId: payload.order.orderId,
+	NumOfItems: payload.order.numberOfItems
+}]]]></db:input-parameters>
+					</db:insert>
+					<ee:transform doc:name="Restoring the Original Data After DB insertion" doc:id="7aa67566-de35-4801-b1b3-adaad55a9233" >
+						<ee:message >
+							<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	order:
+	 {
+	 	orderId : vars.data.order.orderId,
+	 	numberOfItems: vars.data.order.numberOfItems
+	 }
+}]]></ee:set-payload>
+						</ee:message>
+					</ee:transform>
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="de52a1a1-b0f5-43a8-b5c6-0eb8c0aa29cc" size="2">
+						<logger level="INFO" doc:name="Logger" doc:id="25cdd117-5bfb-4adb-94cd-46d1a06267ac" message="#[payload]"/>
+					</batch:aggregator>
+				</batch:step>
+				<batch:step name="Batch_Step1" doc:id="124bf5f3-e080-4bba-bf42-8866cf2f9b3e" acceptPolicy="ONLY_FAILURES">
+					<logger level="INFO" doc:name="Logger" doc:id="cbb11221-061f-4511-8438-febbefcec83d" message="&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;:::::: FailedRecord= #[payload]"/>
+					<file:write doc:name="Write" doc:id="cf8761f7-485b-4e1a-b12d-c05bb2430a80" config-ref="File_Config1" path="D:\\Balaji\\Sample-files\\Write\\FailedRecords\\Failedrecord.txt"/>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete >
+				<logger level="INFO" doc:name="Logger" doc:id="7d433946-0b2c-4abf-8794-31f4f2252967" message="Batch Job is Completed:::::::::"/>
+				<db:insert doc:name="Insert" doc:id="18f91755-c6e3-45e5-a3ef-de33bf363f50" config-ref="Database_Config">
+					<db:sql ><![CDATA[INSERT INTO departmentdetails.OrderProcessingStatus VALUES (:BatchId, :Timestamp, :TotalRecords, :SuccessfulRecords, :FailureRecords)]]></db:sql>
+					<db:input-parameters ><![CDATA[#[{
+	BatchId: payload.batchJobInstanceId,
+	Timestamp: (now()>>"IST") [0 to 15],
+	TotalRecords: payload.totalRecords,
+	SuccessfulRecords: payload.successfulRecords,
+	FailureRecords: payload.failedRecords
+}]]]></db:input-parameters>
+				</db:insert>
+			</batch:on-complete>
+		</batch:job>
+	</flow>
+</mule>
